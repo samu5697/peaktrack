@@ -223,6 +223,10 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;
 .x-btn{padding:4px 10px;color:var(--danger);font-weight:700}
 .habit-line{display:flex;align-items:center;gap:10px;justify-content:space-between;margin:6px 0}
 .habit-line .chip{flex:1}
+.done-btn{width:24px;height:24px;border-radius:50%;border:2px solid var(--border-2);
+  background:var(--bg-2);color:var(--success);font-weight:800;font-size:.8rem;
+  display:inline-flex;align-items:center;justify-content:center;flex:none}
+.done-btn.on{background:var(--success);border-color:var(--success);color:#04211a}
 .cat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;margin-bottom:8px}
 .cat-card.drag-over{border-color:var(--accent);box-shadow:inset 0 0 0 2px var(--accent)}
 .cat-head{display:flex;align-items:center;gap:8px}
@@ -735,28 +739,6 @@ function renderDashboard(){
     </div>
   </div>
 
-  <div class="grid-3">
-    <div class="stat-tile"><div class="v">${goalsP.done}/${goalsP.target}</div><div class="l">Einheiten Woche</div></div>
-    <div class="stat-tile"><div class="v">${streak}</div><div class="l">Streak (Tage)</div></div>
-    <div class="stat-tile"><div class="v">${last?fmtDateShort(last.date):'—'}</div><div class="l">Letztes Training</div></div>
-  </div>
-
-  ${recents.length ? `
-  <div class="card">
-    <h3>Schnell-Log</h3>
-    <div class="muted small mb">Zuletzt genutzt – ein Tap startet eine neue Session</div>
-    <div class="grid-2">
-      ${recents.map(r=>{
-        const isBlock = r.kind==='block';
-        const obj = isBlock ? blMap[r.id] : exMap[r.id];
-        if(!obj) return '';
-        return `<button class="qx" onclick="quickStart('${r.kind}','${r.id}')">
-          <div class="name">${isBlock?'📦 ':''}${escHtml(obj.name)}</div>
-          <div class="meta">${isBlock?'Block':escHtml(obj.type)}</div></button>`;
-      }).join('')}
-    </div>
-  </div>` : ''}
-
   <div class="card">
     <div class="card-row">
       <h3>Tägliche Routinen</h3>
@@ -1000,6 +982,7 @@ function _createSession(preset){
     ],
     durationSec: 0
   };
+  State.openBlockIdx = 0; // accordion starts with the first block open
   saveDraft();
   go('preSession'); // check-in page is shown automatically before logging
 }
@@ -1111,10 +1094,17 @@ function renderSession(){
 
   ${ses.focus ? `<div class="banner info">🎯 Fokus heute: ${escHtml(ses.focus)}</div>` : ''}
 
+  ${(()=>{ const all=ses.blocks.flatMap(b=>b.exercises); const t=all.length, d=all.filter(e=>e.done).length;
+    return t ? `<div class="card" style="padding:11px 14px;margin-bottom:12px">
+      <div class="flex-between"><span class="small" style="font-weight:700">Fortschritt</span><span class="muted small">${d}/${t} erledigt</span></div>
+      <div style="height:8px;background:var(--bg-3);border-radius:99px;overflow:hidden;margin-top:7px">
+        <div style="height:100%;width:${Math.round(d/t*100)}%;background:var(--success);transition:width .2s"></div></div>
+    </div>` : ''; })()}
+
   ${ses.blocks.map((b,i)=> renderSessionBlock(b,i)).join('')}
 
   <div class="row mt">
-    <button class="btn block" onclick="addCustomBlock()">+ Block</button>
+    <button class="btn block" onclick="openAddBlock()">+ Block</button>
   </div>
 
   <div class="row mt">
@@ -1208,14 +1198,18 @@ function setSessField(k,v,renderSlider){
   }
 }
 function renderSessionBlock(b, idx){
-  const collapsed = !!b.collapsed;
   const sel = (State.supersetSelect && State.supersetSelect.bIdx===idx) ? State.supersetSelect : null;
+  // Accordion: only one block open at a time (forced open while selecting a superset)
+  const expanded = ((State.openBlockIdx ?? 0) === idx) || !!sel;
+  const exC = b.exercises.length;
+  const doneC = b.exercises.filter(e=>e.done).length;
+  const summary = exC ? `${doneC}/${exC} erledigt` : 'leer';
   return `<div class="card">
     <div class="card-row">
       <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">
-        <button class="btn sm icon" onclick="toggleBlockCollapse(${idx})" title="${collapsed?'Ausklappen':'Einklappen'}">${collapsed?'▸':'▾'}</button>
+        <button class="btn sm icon" onclick="toggleBlockOpen(${idx})" title="${expanded?'Einklappen':'Ausklappen'}">${expanded?'▾':'▸'}</button>
         <h3 contenteditable="true" onblur="updateBlockName(${idx},this.innerText)" style="margin:0">${escHtml(b.name)}</h3>
-        ${b.exercises.length?`<span class="muted small">(${b.exercises.length})</span>`:''}
+        <span class="muted small" onclick="toggleBlockOpen(${idx})" style="cursor:pointer">${expanded?(exC?`(${exC})`:''):`· ${summary}`}</span>
       </div>
       <div style="display:flex;gap:4px">
         <button class="btn sm icon ${sel?'primary':''}" onclick="toggleSupersetSelect(${idx})" title="Superset">⚡</button>
@@ -1224,7 +1218,7 @@ function renderSessionBlock(b, idx){
         <button class="btn sm icon danger" onclick="removeBlock(${idx})" title="Block entfernen">×</button>
       </div>
     </div>
-    ${collapsed ? '' : `
+    ${!expanded ? '' : `
       ${sel ? `<div class="banner info">⚡ Superset: wähle genau 2 Übungen (${sel.picks.length}/2)
         <div class="row mt">
           <button class="btn sm" onclick="cancelSupersetSelect()">Abbrechen</button>
@@ -1409,10 +1403,11 @@ function renderSessionExercise(block, bIdx, ex, eIdx){
   }
   const sel = (State.supersetSelect && State.supersetSelect.bIdx===bIdx) ? State.supersetSelect : null;
   const picked = sel && sel.picks.includes(eIdx);
-  return `<div class="card" style="margin-top:8px;background:var(--card-2)${picked?';outline:2px solid var(--accent)':''}">
+  return `<div class="card" style="margin-top:8px;background:var(--card-2)${picked?';outline:2px solid var(--accent)':''}${ex.done?';opacity:.55':''}">
     <div class="card-row">
       <h4 style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        ${sel ? `<span class="chip chip-btn ${picked?'on':''}" onclick="toggleSupersetPick(${eIdx})">${picked?'✓ gewählt':'＋ wählen'}</span>` : ''}
+        ${sel ? `<span class="chip chip-btn ${picked?'on':''}" onclick="toggleSupersetPick(${eIdx})">${picked?'✓ gewählt':'＋ wählen'}</span>`
+              : `<button class="done-btn ${ex.done?'on':''}" title="Als erledigt markieren" onclick="toggleExerciseDone(${bIdx},${eIdx})">${ex.done?'✓':''}</button>`}
         ${escHtml(ex.name)} <span class="muted small">· ${escHtml(ex.type)}</span>
         ${ex.supersetWith ? '<span class="badge">⚡ Superset</span>' : ''}
       </h4>
@@ -1467,18 +1462,38 @@ function removeBlock(i){
   }, {danger:true, yesLabel:'Entfernen'});
 }
 function addCustomBlock(){
-  withSes(s=> s.blocks.push({key:'custom_'+Date.now(), name:'Neuer Block', exercises:[]}));
+  withSes(s=>{ s.blocks.push({key:'custom_'+Date.now(), name:'Neuer Block', exercises:[]}); State.openBlockIdx = s.blocks.length-1; });
+}
+function openAddBlock(){
+  // Choose a heading directly when adding a block
+  openModal(`<div class="sheet">
+    <h2>Block hinzufügen<button class="close" onclick="closeModal()">×</button></h2>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn block" onclick="addBlockNamed('Klettern / Bouldern')">🧗 Klettern / Bouldern</button>
+      <button class="btn block" onclick="addBlockNamed('Krafttraining')">💪 Krafttraining</button>
+      <button class="btn block" onclick="addBlockNamed('Mobilisation')">🤸 Mobilisation</button>
+      <button class="btn block ghost" onclick="addBlockNamed('Neuer Block')">＋ Eigener Block</button>
+    </div></div>`);
+}
+function addBlockNamed(name){
+  withSes(s=>{ s.blocks.push({key:'custom_'+Date.now(), name, exercises:[]}); State.openBlockIdx = s.blocks.length-1; });
+  closeModal();
 }
 
-/* Collapse / expand a block */
-function toggleBlockCollapse(i){
-  withSes(s=>{ s.blocks[i].collapsed = !s.blocks[i].collapsed; });
+/* Accordion: open one block, collapse the others */
+function toggleBlockOpen(idx){
+  if(!State.currentSession) return;
+  State.openBlockIdx = ((State.openBlockIdx ?? 0) === idx) ? -1 : idx;
+  render();
+}
+function toggleExerciseDone(b,e){
+  withSes(s=>{ const ex = s.blocks[b].exercises[e]; ex.done = !ex.done; });
 }
 
 /* Superset selection mode */
 function toggleSupersetSelect(idx){
   if(State.supersetSelect && State.supersetSelect.bIdx===idx) State.supersetSelect = null;
-  else State.supersetSelect = { bIdx: idx, picks: [] };
+  else { State.supersetSelect = { bIdx: idx, picks: [] }; State.openBlockIdx = idx; }
   render();
 }
 function cancelSupersetSelect(){ State.supersetSelect = null; render(); }
@@ -1723,8 +1738,11 @@ function insertBlockTemplate(id){
   const b = Store.get('blocks',[]).find(x=>x.id===id);
   const exMap = Object.fromEntries(Store.get('exercises',[]).map(e=>[e.id,e]));
   withSes(s=>{
+    const target = s.blocks[window._addingToBlock];
+    // Adopt the template's name if the block still has the default heading
+    if(target && b && (target.name==='Neuer Block' || !String(target.name||'').trim())) target.name = b.name;
     b.exerciseIds.forEach(eid=>{
-      const ex = exMap[eid]; if(ex) s.blocks[window._addingToBlock].exercises.push(buildExerciseInstance(ex));
+      const ex = exMap[eid]; if(ex) target.exercises.push(buildExerciseInstance(ex));
     });
     pushRecent({kind:'block', id});
   });
@@ -2162,8 +2180,8 @@ function openDayDetail(iso){
       : ''}
     ${injuries.map(i=>`<div class="banner">🩹 ${escHtml(i.diagnosis||i.area)} (Schwere ${i.severity})</div>`).join('')}
     ${sessions.map(s=>renderSessionDetailHtml(s)).join('')}
-    ${sessions.length===0 && iso < todayISO()
-      ? `<div class="row mt"><button class="btn primary block" onclick="logPastSession('${iso}')">＋ Training nachtragen</button></div>`
+    ${iso < todayISO()
+      ? `<div class="row mt"><button class="btn primary block" onclick="logPastSession('${iso}')">＋ ${sessions.length?'Weiteres Training nachtragen':'Training nachtragen'}</button></div>`
       : ''}
   </div>`);
 }
